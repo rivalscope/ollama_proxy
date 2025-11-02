@@ -1,0 +1,13 @@
+services:
+  ollama-proxy:
+    build: .
+    container_name: ollama-proxy
+    ports:
+      - ${CONTAINER_MAPPING:-"8000:8000"}
+    environment:
+      - API_TOKEN=${API_TOKEN:-your-secret-token-here}
+      - OLLAMA_INSTANCES=${OLLAMA_INSTANCES:-default:localhost:11434}
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DEBUG=true
+    restart: unless-stopped
