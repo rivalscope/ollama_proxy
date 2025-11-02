@@ -189,6 +189,16 @@ async def proxy_request(request: Request, target_url: str, instance_name: str = 
         # Get request body
         body = await request.body()
         
+        # Check if the request is for streaming
+        is_stream_request = False
+        body_json = None
+        if body:
+            try:
+                body_json = json.loads(body)
+                is_stream_request = body_json.get("stream", False)
+            except:
+                pass
+        
         # Log request details in debug mode
         if DEBUG_MODE:
             logger.debug(f"📤 Request details:")
@@ -196,9 +206,11 @@ async def proxy_request(request: Request, target_url: str, instance_name: str = 
             logger.debug(f"   URL: {target_url}")
             logger.debug(f"   Query params: {dict(request.query_params)}")
             logger.debug(f"   Body size: {len(body)} bytes")
+            logger.debug(f"   Stream requested: {is_stream_request}")
             if body and len(body) < 1000:  # Only log small bodies
                 try:
-                    body_json = json.loads(body)
+                    if body_json is None:
+                        body_json = json.loads(body)
                     logger.debug(f"   Body: {json.dumps(body_json, indent=2)}")
                 except:
                     logger.debug(f"   Body (raw): {body[:200]}...")
@@ -215,8 +227,43 @@ async def proxy_request(request: Request, target_url: str, instance_name: str = 
         
         logger.info(f"🔄 Proxying {request.method} to '{instance_name}': {target_url}")
         
+        # Make the request to Ollama with streaming if needed
+        if is_stream_request:
+            logger.debug("🌊 Initiating streaming request to Ollama")
+            
+            # Create a generator that manages its own client and stream
+            async def stream_generator():
+                chunk_count = 0
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    async with client.stream(
+                        method=request.method,
+                        url=target_url,
+                        content=body,
+                        headers=headers,
+                        params=request.query_params
+                    ) as response:
+                        logger.debug(f"📥 Response status: {response.status_code}")
+                        logger.debug(f"📥 Response headers: {dict(response.headers)}")
+                        
+                        # Stream the response immediately
+                        async for chunk in response.aiter_bytes():
+                            chunk_count += 1
+                            if DEBUG_MODE and chunk_count % 10 == 0:
+                                logger.debug(f"   Streamed {chunk_count} chunks so far...")
+                            yield chunk
+                        
+                        if DEBUG_MODE:
+                            logger.debug(f"✅ Streaming complete: {chunk_count} total chunks")
+            
+            # Return the streaming response immediately
+            return StreamingResponse(
+                stream_generator(),
+                media_type="application/json"
+            )
+        
+        # Non-streaming path
         async with httpx.AsyncClient(timeout=300.0) as client:
-            # Make the request to Ollama
+            # Make regular non-streaming request
             response = await client.request(
                 method=request.method,
                 url=target_url,
@@ -227,55 +274,33 @@ async def proxy_request(request: Request, target_url: str, instance_name: str = 
             
             logger.debug(f"📥 Response status: {response.status_code}")
             
-            # Check if response is streaming (for chat/generate endpoints)
+            # Check if response is streaming (fallback for when stream param is not detected)
             content_type = response.headers.get("content-type", "")
             logger.debug(f"📥 Response content-type: {content_type}")
+            logger.debug("📄 Regular response (non-streaming)")
+            # Return regular response - pass through the raw content
+            try:
+                response_data = response.json() if response.text else {}
+                if DEBUG_MODE and response.text and len(response.text) < 1000:
+                    logger.debug(f"📥 Response body: {json.dumps(response_data, indent=2)}")
+            except Exception as e:
+                logger.warning(f"⚠️  Could not parse response as JSON: {e}")
+                # Return raw text if JSON parsing fails
+                response_data = {"raw_response": response.text}
             
-            if "text/event-stream" in content_type or "application/x-ndjson" in content_type:
-                logger.debug("🌊 Streaming response detected")
-                # Stream the response
-                chunk_count = 0
-                async def stream_generator():
-                    nonlocal chunk_count
-                    async for chunk in response.aiter_bytes():
-                        chunk_count += 1
-                        if DEBUG_MODE and chunk_count % 10 == 0:
-                            logger.debug(f"   Streamed {chunk_count} chunks so far...")
-                        yield chunk
-                    if DEBUG_MODE:
-                        logger.debug(f"✅ Streaming complete: {chunk_count} total chunks")
-                
-                return StreamingResponse(
-                    stream_generator(),
-                    status_code=response.status_code,
-                    headers=dict(response.headers),
-                    media_type=content_type
-                )
-            else:
-                logger.debug("📄 Regular response (non-streaming)")
-                # Return regular response - pass through the raw content
-                try:
-                    response_data = response.json() if response.text else {}
-                    if DEBUG_MODE and response.text and len(response.text) < 1000:
-                        logger.debug(f"📥 Response body: {json.dumps(response_data, indent=2)}")
-                except Exception as e:
-                    logger.warning(f"⚠️  Could not parse response as JSON: {e}")
-                    # Return raw text if JSON parsing fails
-                    response_data = {"raw_response": response.text}
-                
-                logger.info(f"✅ Request completed successfully: {response.status_code}")
-                
-                # Filter out hop-by-hop headers
-                response_headers = {
-                    k: v for k, v in response.headers.items()
-                    if k.lower() not in ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
-                }
-                
-                return JSONResponse(
-                    content=response_data,
-                    status_code=response.status_code,
-                    headers=response_headers
-                )
+            logger.info(f"✅ Request completed successfully: {response.status_code}")
+            
+            # Filter out hop-by-hop headers
+            response_headers = {
+                k: v for k, v in response.headers.items()
+                if k.lower() not in ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
+            }
+            
+            return JSONResponse(
+                content=response_data,
+                status_code=response.status_code,
+                headers=response_headers
+            )
     
     except httpx.ConnectError as e:
         logger.error(f"❌ Connection error to {target_url}: {e}")

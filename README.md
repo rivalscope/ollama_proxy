@@ -60,6 +60,8 @@ curl -H "Authorization: Bearer your-token" \
   http://localhost:8000/api/generate
 ```
 
+curl --no-buffer -H "Authorization: Bearer 123456" -H "Content-Type: application/json" -d '{"model": "llama3.2:3b", "prompt": "Tell me a short story", "stream": true}' http://localhost:8000/api/generate
+
 **Use specific backend:**
 
 ```bash
