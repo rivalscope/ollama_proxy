@@ -10,4 +10,4 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - DEBUG=true
-    restart: unless-stopped
+    restart: unless-stopped # or always
