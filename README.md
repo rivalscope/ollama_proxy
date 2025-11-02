@@ -82,7 +82,6 @@ curl -H "Authorization: Bearer your-token" \
 
 - `default:localhost:11434` - Local
 - `remote:192.168.1.100:11434` - Remote LAN
-- `cloud:llm.flowfoundry.ai:443` - Cloudflare Tunnel
 
 All Ollama API endpoints are supported: `/api/tags`, `/api/generate`, `/api/chat`, `/api/embeddings`, etc.
 
